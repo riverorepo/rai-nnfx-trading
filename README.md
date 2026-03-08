@@ -14,6 +14,11 @@ NNFX is a structured algorithmic forex trading methodology that requires all 5 i
 | `Experts/NNFX_Bot.mq4` | Fully automated NNFX EA — evaluates all 5 conditions, splits orders, manages trades |
 | `Experts/nnfxautotrade.mq4` | Semi-manual trade panel — BUY/SELL buttons with NNFX position sizing (by Alex Cercos) |
 
+### Scripts
+| File | Description |
+|------|-------------|
+| `Scripts/NNFX_MultiBacktest.mq4` | Custom multi-pair backtester (v3.0) — bypasses MT4 Strategy Tester, runs as a Script on any chart |
+
 ### Custom Indicators
 | File | Role | Source | Non-repainting |
 |------|------|--------|----------------|
@@ -21,6 +26,12 @@ NNFX is a structured algorithmic forex trading methodology that requires all 5 i
 | `Indicators/HMA.mq4` | Baseline (alt) | [mql5.com/en/code/25629](https://www.mql5.com/en/code/25629) | ✅ |
 | `Indicators/SSL_Channel.mq4` | C1 / C2 / Exit | [mql5.com/en/code/39878](https://www.mql5.com/en/code/39878) | ✅ |
 | `Indicators/Waddah_Attar_Explosion.mq4` | Volume | [mql5.com/en/code/7051](https://www.mql5.com/en/code/7051) | ✅ |
+
+### Utilities
+| File | Description |
+|------|-------------|
+| `run_backtests.ps1` | PowerShell script for automated MT4 Strategy Tester runs (pair-by-pair) |
+| `parse_log.ps1` | PowerShell helper to parse tester logs and count signal rejections by condition |
 
 ATR is built into MT4 (no download needed).
 
@@ -61,6 +72,27 @@ ATR is built into MT4 (no download needed).
 
 ## Backtesting
 
+### Option A: Multi-Pair Script (Recommended)
+
+`Scripts/NNFX_MultiBacktest.mq4` runs as a **Script** on any chart and backtests 5 pairs (EURUSD, GBPUSD, USDJPY, USDCHF, AUDUSD) in one pass. This bypasses MT4's Strategy Tester, which doesn't support command-line automation on Oanda's MT4 build.
+
+**Setup:**
+1. Copy `Scripts/NNFX_MultiBacktest.mq4` → `MT4/MQL4/Scripts/`
+2. Compile in MetaEditor (F7)
+3. Drag onto any D1 chart → configure inputs → OK
+4. Results written to `MQL4/Files/NNFX_Backtest_Results.csv` and `NNFX_Backtest_Summary.txt`
+
+**Spread modes** (input `InpSpreadMode`):
+| Mode | Description |
+|------|-------------|
+| 0 | Current live spread (snapshot at run time) |
+| **1** | **Typical Oanda averages per pair (default, recommended)** |
+| 2 | Custom fixed spread (set `InpCustomSpread` in points) |
+
+MQL4 does not store historical per-bar spread data (`iSpread` is MQL5-only), so mode 1 uses published Oanda average spreads: EURUSD 1.4, GBPUSD 1.8, USDJPY 1.4, USDCHF 1.7, AUDUSD 1.4 pips.
+
+### Option B: MT4 Strategy Tester (Single Pair)
+
 In MT4 Strategy Tester (Ctrl+R):
 - EA: `NNFX_Bot`
 - Symbol: `EURUSD` (or any major)
@@ -90,14 +122,36 @@ In MT4 Strategy Tester (Ctrl+R):
 | WAE | 2 | Explosion line (BB width) |
 | WAE | 3 | Dead zone line |
 
+## Backtest Results (2015–2025, D1, 2% risk, $10k start)
+
+### Stochastic C2 | SSL=20 | Spread: Current Live
+
+| Pair | Signals | Orders | WR% | Long WR | Short WR | Net Profit | PF | MaxDD% |
+|------|---------|--------|------|---------|----------|------------|------|--------|
+| EURUSD | 95 | 190 | 43.2% | 43.2% | 43.1% | -$1,691 | 0.68 | 19.3% |
+| GBPUSD | 75 | 150 | 46.7% | 47.4% | 45.9% | -$799 | 0.79 | 13.0% |
+| USDJPY | 87 | 174 | 54.0% | 50.9% | 60.0% | -$17 | 1.00 | 12.4% |
+| USDCHF | 102 | 204 | 43.1% | 40.6% | 47.4% | -$1,730 | 0.66 | 19.2% |
+| AUDUSD | 90 | 180 | 42.2% | 48.6% | 37.7% | -$1,672 | 0.67 | 21.4% |
+
+**Key findings:**
+- Stochastic C2 fixes the long/short directional bias that MACD had (MACD showed 60% long vs 30% short WR on EURUSD)
+- USDJPY is the strongest pair (PF 1.00, 54% WR, lowest drawdown)
+- Strategy needs parameter optimization before going live
+
+### MACD C2 | SSL=10 | Manual MT4 Strategy Tester (validation)
+- EURUSD: 110 trades, +$21.70, PF 1.01, DD 9.49%, Long WR 60%, Short WR 30%
+- Confirmed severe long/short asymmetry with MACD — Stochastic is preferred C2
+
 ## Backtest Config
 
-See `backtest_EURUSD.ini` — run via MT4 Strategy Tester or command line.
+See `ini/` directory for MT4 Strategy Tester config files per pair, or use `run_backtests.ps1` for automated runs.
 
 ## Roadmap
-- [ ] Backtest EURUSD, GBPUSD, USDJPY (10 years)
-- [ ] Optimize indicator parameters
+- [x] Backtest EURUSD, GBPUSD, USDJPY, USDCHF, AUDUSD (10 years)
+- [x] Test Stochastic vs MACD for C2
+- [x] Custom multi-pair backtester script (bypasses MT4 Strategy Tester limitations)
+- [ ] Optimize indicator parameters (SSL lengths, Stochastic settings, ATR period)
 - [ ] Add continuation trade logic
 - [ ] Test HMA vs KAMA baseline
-- [ ] Test Stochastic vs MACD for C2
 - [ ] VPS deployment for live trading
