@@ -11,13 +11,19 @@ NNFX is a structured algorithmic forex trading methodology that requires all 5 i
 ### Expert Advisors
 | File | Description |
 |------|-------------|
-| `Experts/NNFX_Bot.mq4` | Fully automated NNFX EA — evaluates all 5 conditions, splits orders, manages trades |
+| `Experts/NNFX_Bot.mq4` | V1 live trading EA — KAMA baseline + WAE volume (best on USDJPY, GBPUSD) |
+| `Experts/NNFX_Combined.mq4` | Combined V1+V2 EA — auto-detects pair, runs best strategy per pair (magic 77702) |
+| `Experts/NNFX_RepaintCheck.mq4` | Repaint detector — run in Strategy Tester (Every Tick) to verify indicators don't repaint |
 | `Experts/nnfxautotrade.mq4` | Semi-manual trade panel — BUY/SELL buttons with NNFX position sizing (by Alex Cercos) |
 
 ### Scripts
 | File | Description |
 |------|-------------|
-| `Scripts/NNFX_MultiBacktest.mq4` | Custom multi-pair backtester (v3.0) — bypasses MT4 Strategy Tester, runs as a Script on any chart |
+| `Scripts/NNFX_MultiBacktest.mq4` | V1 multi-pair backtester — bypasses MT4 Strategy Tester, runs as a Script on any chart |
+| `Scripts/NNFX_MultiBacktest_V2.mq4` | V2 multi-pair backtester — Ichimoku Kijun baseline + Momentum Magnitude volume |
+| `Scripts/NNFX_Optimizer.mq4` | Parameter sweep optimizer — tests SSL lengths, Stoch K, ATR period, KAMA vs HMA, continuation on/off |
+| `Scripts/NNFX_IndicatorTester.mq4` | Generic indicator test harness — swap any indicator into any slot with 8 signal methods |
+| `Scripts/NNFX_MegaSweep.mq4` | Bulk indicator sweep — tests 104 built-in MT4 indicator combos across all slots and 7 pairs |
 
 ### Custom Indicators
 | File | Role | Source | Non-repainting |
@@ -39,11 +45,18 @@ ATR is built into MT4 (no download needed).
 
 ### The 5 Conditions (all must align on completed bar)
 
-1. **Baseline** — KAMA or HMA (selectable). Fresh price cross required. Price must be within 1x ATR of baseline.
+1. **Baseline** — KAMA or HMA (selectable). Fresh price cross required (or C1 flip for continuation trades). Price must be within 1x ATR of baseline.
 2. **C1 (SSL Channel)** — Direction (Hlv1 buffer: +1/-1) must agree with baseline.
 3. **C2 (MACD or Stochastic)** — Must confirm on current or previous bar.
 4. **Volume (WAE)** — Explosion line > dead zone + trend histogram matches direction + trend growing.
 5. **Exit (SSL Channel)** — Separate instance. Color flip against trade closes the runner.
+
+### Continuation Trades (optional, `InpAllowContinuation`)
+When enabled, the bot can re-enter trades without a fresh baseline cross:
+- Price must already be on the correct side of baseline
+- A fresh **C1 SSL direction change** serves as the entry trigger instead
+- All other conditions (C2, Volume, ATR proximity) still required
+- Useful for catching trends after the initial baseline cross entry closes
 
 ### Entry & Order Management
 - Enters at next bar open after signal bar
@@ -100,6 +113,28 @@ In MT4 Strategy Tester (Ctrl+R):
 - Model: `Open prices only` (correct for D1 bar-open EA)
 - Dates: 2015–2025
 
+### Option C: Parameter Optimizer (Find Best Settings)
+
+`Scripts/NNFX_Optimizer.mq4` sweeps parameter combinations and ranks them by aggregate profit factor across all 5 pairs.
+
+**Setup:**
+1. Copy `Scripts/NNFX_Optimizer.mq4` → `MT4/MQL4/Scripts/`
+2. Compile in MetaEditor (F7)
+3. Drag onto any D1 chart → configure sweep ranges → OK
+4. Results saved to `MQL4/Files/NNFX_Optimizer_Results.csv`
+
+**Parameters swept:**
+| Parameter | Default Range | Step |
+|-----------|--------------|------|
+| SSL C1 Length | 5–30 | 5 |
+| SSL Exit Length | 5–30 | 5 |
+| Stochastic %K | 5–21 | 3 |
+| ATR Period | 7–21 | 7 |
+| Baseline | KAMA vs HMA | — |
+| Continuation | On vs Off | — |
+
+Default sweep = 2,304 combinations × 5 pairs. Adjust step sizes to narrow or widen the search.
+
 ### Key Metrics to Watch
 | Metric | Target |
 |--------|--------|
@@ -124,7 +159,59 @@ In MT4 Strategy Tester (Ctrl+R):
 
 ## Backtest Results (2015–2025, D1, 2% risk, $10k start)
 
-### Stochastic C2 | SSL=20 | Spread: Current Live
+### Optimized: Stoch C2 | SSL C1=25, Exit=5 | ATR=7 | Spread: Typical Oanda
+
+All 7 major pairs tested. Ranked by profit factor:
+
+| Rank | Pair | Signals | Orders | WR% | Long WR | Short WR | Net Profit | PF | MaxDD% |
+|------|------|---------|--------|------|---------|----------|------------|------|--------|
+| 1 | USDJPY | 72 | 144 | 61.1% | 60.9% | 61.5% | +$897 | 1.24 | 9.2% |
+| 2 | EURUSD | 84 | 168 | 50.0% | 51.3% | 48.9% | +$515 | 1.13 | 6.5% |
+| 3 | GBPUSD | 65 | 130 | 58.5% | 54.3% | 63.3% | +$331 | 1.13 | 4.3% |
+| 4 | AUDUSD | 71 | 142 | 53.5% | 70.4% | 43.2% | -$56 | 0.98 | 7.4% |
+| 5 | USDCHF | 80 | 160 | 48.8% | 45.3% | 55.6% | -$175 | 0.95 | 6.0% |
+| 6 | USDCAD | 96 | 192 | 46.9% | 50.0% | 43.5% | -$1,019 | 0.79 | 16.4% |
+| 7 | NZDUSD | 95 | 190 | 42.1% | 50.0% | 36.8% | -$2,027 | 0.58 | 22.0% |
+
+**V1 recommended pairs: USDJPY, GBPUSD** (see V2 below for EURUSD, NZDUSD)
+
+**Optimizer findings:**
+- KAMA dominates HMA across all parameter combos — HMA didn't make top 50
+- Longer SSL C1 (25–30) filters noise better than shorter (10–20)
+- Short SSL Exit (5) locks in runner profits faster
+- Shorter ATR (7) reacts to volatility changes faster than ATR(14)
+- Continuation trades did not improve results — strict baseline cross is better
+
+### V2 Strategy: Ichimoku Kijun + Momentum Magnitude (2015–2025, D1, 2% risk, $10k)
+
+MegaSweep tested 104 built-in MT4 indicator combos across all 5 slots. Key findings:
+- **Baseline:** Ichimoku Kijun-sen(20) outperformed KAMA on EURUSD/NZDUSD
+- **Volume:** Momentum Magnitude(14) outperformed WAE across most pairs
+
+V2 uses: Kijun(20) baseline + SSL C1=25 + Stoch C2 + Momentum Magnitude(14) volume + SSL Exit=5
+
+| Rank | Pair | Signals | Orders | WR% | Net Profit | PF | MaxDD% |
+|------|------|---------|--------|------|------------|------|--------|
+| 1 | EURUSD | 91 | 182 | 53.8% | +$1,160 | 1.58 | 5.8% |
+| 2 | NZDUSD | 85 | 170 | 47.1% | +$579 | 1.32 | 11.2% |
+
+V2 improves EURUSD from PF 1.13 → 1.58 and turns NZDUSD from -$2,027 → +$579.
+
+### Combined Portfolio (V1 + V2)
+
+The **NNFX_Combined.mq4** EA auto-detects the pair and applies the best strategy:
+
+| Pair | Strategy | Net Profit | PF |
+|------|----------|------------|------|
+| USDJPY | V1 (KAMA + WAE) | +$897 | 1.24 |
+| GBPUSD | V1 (KAMA + WAE) | +$331 | 1.13 |
+| EURUSD | V2 (Kijun + MomMag) | +$1,160 | 1.58 |
+| NZDUSD | V2 (Kijun + MomMag) | +$579 | 1.32 |
+| **Total** | | **+$2,967** | |
+
+Magic numbers: V1 standalone = 77701, Combined EA = 77702
+
+### Pre-Optimization: Stoch C2 | SSL=20 | Spread: Current Live
 
 | Pair | Signals | Orders | WR% | Long WR | Short WR | Net Profit | PF | MaxDD% |
 |------|---------|--------|------|---------|----------|------------|------|--------|
@@ -133,11 +220,6 @@ In MT4 Strategy Tester (Ctrl+R):
 | USDJPY | 87 | 174 | 54.0% | 50.9% | 60.0% | -$17 | 1.00 | 12.4% |
 | USDCHF | 102 | 204 | 43.1% | 40.6% | 47.4% | -$1,730 | 0.66 | 19.2% |
 | AUDUSD | 90 | 180 | 42.2% | 48.6% | 37.7% | -$1,672 | 0.67 | 21.4% |
-
-**Key findings:**
-- Stochastic C2 fixes the long/short directional bias that MACD had (MACD showed 60% long vs 30% short WR on EURUSD)
-- USDJPY is the strongest pair (PF 1.00, 54% WR, lowest drawdown)
-- Strategy needs parameter optimization before going live
 
 ### MACD C2 | SSL=10 | Manual MT4 Strategy Tester (validation)
 - EURUSD: 110 trades, +$21.70, PF 1.01, DD 9.49%, Long WR 60%, Short WR 30%
@@ -151,7 +233,16 @@ See `ini/` directory for MT4 Strategy Tester config files per pair, or use `run_
 - [x] Backtest EURUSD, GBPUSD, USDJPY, USDCHF, AUDUSD (10 years)
 - [x] Test Stochastic vs MACD for C2
 - [x] Custom multi-pair backtester script (bypasses MT4 Strategy Tester limitations)
-- [ ] Optimize indicator parameters (SSL lengths, Stochastic settings, ATR period)
-- [ ] Add continuation trade logic
-- [ ] Test HMA vs KAMA baseline
+- [x] Optimize indicator parameters (SSL lengths, Stochastic settings, ATR period)
+- [x] Add continuation trade logic
+- [x] Test HMA vs KAMA baseline
+- [x] Run optimizer and analyze results
+- [x] Expand to all 7 major pairs
+- [x] MegaSweep: test 104 built-in indicator combos across all slots
+- [x] Build V2 strategy (Ichimoku Kijun + Momentum Magnitude)
+- [x] Build combined V1+V2 EA with per-pair strategy auto-detection
+- [x] Repaint checker EA for validating custom indicators
+- [x] Generic indicator test harness (IndicatorTester)
+- [ ] Test custom (non-built-in) indicators at scale
+- [ ] Walk-forward analysis / out-of-sample validation
 - [ ] VPS deployment for live trading

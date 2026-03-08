@@ -18,10 +18,10 @@ input double   InpKamaSlowMA      = 30.0;    // KAMA Slow
 input bool     InpSSL_C1_Wicks    = false;   // C1 SSL Wicks
 input int      InpSSL_C1_MA1Type  = 0;       // C1 SSL MA1 Type
 input int      InpSSL_C1_MA1Src   = 2;       // C1 SSL MA1 Src (PRICE_HIGH)
-input int      InpSSL_C1_MA1Len   = 20;      // C1 SSL MA1 Length
+input int      InpSSL_C1_MA1Len   = 25;      // C1 SSL MA1 Length
 input int      InpSSL_C1_MA2Type  = 0;       // C1 SSL MA2 Type
 input int      InpSSL_C1_MA2Src   = 3;       // C1 SSL MA2 Src (PRICE_LOW)
-input int      InpSSL_C1_MA2Len   = 20;      // C1 SSL MA2 Length
+input int      InpSSL_C1_MA2Len   = 25;      // C1 SSL MA2 Length
 input int      InpC2Type          = 1;       // C2: 0=MACD, 1=Stochastic
 input int      InpStochK          = 14;      // Stoch %K
 input int      InpStochD          = 3;       // Stoch %D
@@ -36,11 +36,11 @@ input int      InpWAE_TrendPwr    = 15;      // WAE Trend Power
 input bool     InpSSL_Exit_Wicks  = false;   // Exit SSL Wicks
 input int      InpSSL_Exit_MA1Type= 0;       // Exit SSL MA1 Type
 input int      InpSSL_Exit_MA1Src = 2;       // Exit SSL MA1 Src
-input int      InpSSL_Exit_MA1Len = 20;      // Exit SSL MA1 Length
+input int      InpSSL_Exit_MA1Len = 5;       // Exit SSL MA1 Length
 input int      InpSSL_Exit_MA2Type= 0;       // Exit SSL MA2 Type
 input int      InpSSL_Exit_MA2Src = 3;       // Exit SSL MA2 Src
-input int      InpSSL_Exit_MA2Len = 20;      // Exit SSL MA2 Length
-input int      InpATRPeriod       = 14;      // ATR Period
+input int      InpSSL_Exit_MA2Len = 5;       // Exit SSL MA2 Length
+input int      InpATRPeriod       = 7;       // ATR Period
 input double   InpSLMultiplier    = 1.5;     // SL Multiplier (ATR x)
 input double   InpTP1Multiplier   = 1.0;     // TP1 Multiplier (ATR x)
 input double   InpMaxATRDist      = 1.0;     // Max Baseline Distance (ATR x)
@@ -48,6 +48,9 @@ input double   InpRiskPercent     = 2.0;     // Risk % per trade
 input double   InpStartBalance    = 10000.0; // Starting Balance
 input int      InpSpreadMode      = 1;       // Spread: 0=Current, 1=Typical, 2=Custom(pts)
 input int      InpCustomSpread     = 15;      // Custom Spread (points, if mode=2)
+input bool     InpAllowContinuation = false;  // Allow Continuation Trades
+input int      InpHmaPeriod       = 20;      // HMA Period
+input double   InpHmaDivisor      = 2.0;     // HMA Divisor
 
 #define IND_KAMA "KAMA"
 #define IND_SSL  "SSL_Channel"
@@ -109,7 +112,7 @@ int GetTypicalSpread(string sym)
 //+------------------------------------------------------------------+
 void OnStart()
 {
-   string pairs[] = {"EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD"};
+   string pairs[] = {"EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "NZDUSD", "USDCAD"};
    int numPairs = ArraySize(pairs);
    PairResult results[];
    ArrayResize(results, numPairs);
@@ -307,7 +310,17 @@ int EvaluateEntryForPair(string sym, int bar)
    bool baselineCross = false;
    if(baselineDir == 1 && closePrev <= blPrev) baselineCross = true;
    if(baselineDir == -1 && closePrev >= blPrev) baselineCross = true;
-   if(!baselineCross) return 0;
+   if(!baselineCross)
+   {
+      if(!InpAllowContinuation) return 0;
+      // Continuation: require fresh C1 SSL direction change as trigger
+      int c1Now  = GetSSL_C1_ForPair(sym, bar);
+      int c1Prev2 = GetSSL_C1_ForPair(sym, bar + 1);
+      if(c1Now != c1Prev2 && c1Now == baselineDir)
+      { /* continuation trigger — proceed */ }
+      else
+         return 0;
+   }
 
    double atr = iATR(sym, PERIOD_D1, InpATRPeriod, bar);
    double dist = MathAbs(closeCurr - blCurr);
@@ -333,7 +346,7 @@ double GetBaselineForPair(string sym, int shift)
    if(InpBaselineType == 0)
       return iCustom(sym, PERIOD_D1, IND_KAMA, InpKamaPeriod, InpKamaFastMA, InpKamaSlowMA, 0, shift);
    else
-      return iCustom(sym, PERIOD_D1, "HMA", 20, 2.0, 0, 0, shift);
+      return iCustom(sym, PERIOD_D1, "HMA", InpHmaPeriod, InpHmaDivisor, PRICE_CLOSE, 0, shift);
 }
 
 //+------------------------------------------------------------------+
