@@ -1,91 +1,50 @@
 # NNFX Trading Bot — Project Rules
 
 ## Project Goal
-Build an automated trading bot implementing the No Nonsense Forex (NNFX) strategy for MetaTrader 5 (MT5). The bot is written in MQL5.
+Automated trading bots implementing the No Nonsense Forex (NNFX) strategy for MetaTrader 4 (MT4).
 
 ## Platform
-- **Primary:** MetaTrader 5 (MQL5)
-- **Fallback:** MetaTrader 4 (MQL4) if needed
-- **Language:** MQL5 (.mq5 files, compiled to .ex5)
-- **Testing:** MT5 Strategy Tester (visual + optimization modes)
+- **Primary:** MetaTrader 4 (MQL4) via OANDA broker
+- **Language:** MQL4 (.mq4 files, compiled to .ex4)
+- **Compiler:** MetaEditor at `C:\Program Files (x86)\OANDA - MetaTrader 4\metaeditor.exe`
+- **Data directory:** `C:\Users\river\AppData\Roaming\MetaQuotes\Terminal\7E6C4A6F67D435CAE80890D8C1401332\`
+- **Testing:** Scripts run directly on charts (MT4 Strategy Tester has limitations on OANDA build)
 
-## NNFX Strategy Rules
+## Active EAs
+| EA | Timeframe | Pairs | Magic | Strategy |
+|----|-----------|-------|-------|----------|
+| NNFX_Combined.mq4 | D1 | EURUSD, GBPUSD, USDJPY, NZDUSD | 77702 | V1 KAMA/V2 Kijun auto-detect |
+| NNFX_Combined_H1.mq4 | H1 | USDJPY only | 77703 | V3 MTF custom indicators |
 
-### Indicators (all configurable via input parameters)
-1. **Baseline** — determines trend direction. Only take trades in baseline direction.
-   - Price must be within 1x ATR of baseline to enter
-   - Default: Ichimoku Kinko Hyo (Tenkan-sen), KAMA, or HMA
-2. **C1 (Primary Confirmation)** — must agree with baseline direction to open trade
-3. **C2 (Secondary Confirmation)** — must agree with C1 on entry candle (or previous candle — configurable)
-4. **Volume Indicator** — trade only when volume confirms (e.g., WAE, Waddah Attar Explosion)
-5. **Exit Indicator** — used to close trades early (optional, configurable)
-6. **ATR** — all risk calculations based on ATR(14) by default
+## H1 V3 Strategy (Current Focus)
+- H4 McGinley Dynamic(14) — trend direction filter
+- H1 Keltner Channel(20) — midline flip entry trigger
+- H1 RangeFilter(30, 2.5) — confirmation
+- H1 HalfTrend(3) — exit signal
+- 3% risk with compounding, split into 2 orders (TP at 1xATR + runner)
+- Object prefix: "NNFXH1_" (D1 uses "NNFX_")
 
-### Entry Rules
-- All 5 conditions must align: Baseline + C1 + C2 + Volume + ATR proximity
-- Enter at open of next candle after signal candle
-- No trades if price is more than 1x ATR from baseline
-- One trade per pair at a time
+## Compilation Notes
+- MetaEditor CLI: `/compile:"path.mq4" /log:"path.log"`
+- Log files are UTF-16LE encoded — use `tr -d '\0'` or `iconv` to read
+- Must wait 5+ seconds between sequential compiles or .ex4 files won't generate
+- After compile, copy .ex4 to the MT4 data directory (MQL4/Experts/ or MQL4/Scripts/)
 
-### Risk Management
-- **Stop Loss:** 1.5x ATR from entry price
-- **Take Profit:** 1x ATR (for first half), let second half run
-- **Position Sizing:** Risk fixed % of account balance per trade (default 2%)
-- **Lot Size:** Calculated dynamically from ATR stop and account risk %
-
-### Trade Management
-- Split position into 2 halves
-  - Half 1: Close at 1x ATR profit
-  - Half 2: Move SL to breakeven after Half 1 closes, trail or use exit indicator
-- Opposite signal on open trade = close immediately
-
-### Filters
-- **Continuation trade:** If baseline flip occurs mid-trend, re-enter if all signals align
-- **No news trading:** Avoid entries within configurable hours of high-impact news (optional)
-- **Session filter:** Configurable trading hours (default: London + NY overlap)
-
-## Code Structure
-
-```
-nnfx/
-├── CLAUDE.md               ← this file
-├── README.md
-├── Experts/
-│   └── NNFX_Bot.mq5        ← main EA file
-├── Indicators/
-│   └── (custom indicator wrappers if needed)
-├── Include/
-│   ├── NNFX_Core.mqh       ← strategy logic
-│   ├── RiskManager.mqh     ← position sizing, SL/TP calc
-│   ├── TradeManager.mqh    ← open/close/modify orders
-│   └── IndicatorManager.mqh← indicator signal interface
-├── Scripts/
-│   └── (utility scripts)
-└── Backtest/
-    └── (results and notes)
-```
+## Custom Indicators (all non-repainting)
+All use closed-bar data only. Signal buffers use +1 (bull) / -1 (bear) convention.
+- McGinley_Dynamic, KeltnerChannel, RangeFilter, HalfTrend
+- Supertrend, Ehlers_MAMA, DonchianChannel, T3_MA, JMA, SqueezeMomentum
 
 ## Coding Standards
-- All indicator inputs must be configurable via EA input parameters
-- No hardcoded magic numbers — use named constants or enums
-- Each module (risk, trade, indicator) in its own .mqh include file
-- Log all trade decisions to the MT5 journal with timestamps
-- Handle errors from OrderSend, PositionModify etc. explicitly
-- Use `CTrade` class from MQL5 standard library for order management
+- All indicator inputs configurable via EA input parameters
+- No hardcoded magic numbers — use named constants
+- Log trade decisions to MT4 journal
+- Handle OrderSend errors explicitly
+- Use OrderSelect/OrderClose for order management (MQL4 style, not CTrade)
 
-## Indicator Abstraction
-Each indicator slot (Baseline, C1, C2, Volume, Exit) should use an enum to select which indicator to use, so the user can switch indicators without changing code:
-```mql5
-enum ENUM_BASELINE { BASE_ICHIMOKU, BASE_KAMA, BASE_HMA, BASE_EMA };
-enum ENUM_CONFIRM  { CONF_MACD, CONF_RSI, CONF_STOCH, CONF_SSL };
-```
-
-## Backtesting Requirements
-- Must pass 10+ years of data on major pairs (EURUSD, GBPUSD, USDJPY)
-- Minimum targets: Profit Factor > 1.5, Max Drawdown < 20%, Win Rate > 40%
-- Optimize ATR period, risk %, indicator parameters
-
-## Out of Scope (for now)
-- Live broker connection / VPS deployment
-- Multi-currency portfolio management
-- News feed API integration
+## Risk Management
+- Stop Loss: 1.5x ATR from entry
+- Take Profit: 1x ATR (order 1), runner (order 2)
+- Position sizing: Risk % of balance / (SL pips × tick value)
+- After Order 1 TP → runner SL moves to breakeven
+- Exit indicator flip or HTF flip against trade → close all

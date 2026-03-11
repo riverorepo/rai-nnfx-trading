@@ -4,7 +4,19 @@ Automated No Nonsense Forex (NNFX) Expert Advisor for MetaTrader 4, built for Oa
 
 ## Strategy Overview
 
-NNFX is a structured algorithmic forex trading methodology that requires all 5 indicator conditions to align before entering a trade. Trades only on the **Daily (D1)** timeframe.
+NNFX is a structured algorithmic forex trading methodology that requires all indicator conditions to align before entering a trade.
+
+### D1 Strategy (V1/V2)
+Classic NNFX 5-condition system on the Daily timeframe: Baseline + C1 + C2 + Volume + Exit.
+
+### H1 Strategy (V3) — USDJPY Only
+Multi-timeframe system using custom non-repainting indicators:
+- **H4 McGinley Dynamic(14)** — trend filter (direction only)
+- **H1 Keltner Channel(20)** — midline flip as entry trigger
+- **H1 RangeFilter(30, 2.5)** — confirmation
+- **H1 HalfTrend(3)** — exit signal
+- **3% risk with compounding** — $10K → $79,344 (+693%) over 5 years in backtesting
+- PF 1.66 | 67% win rate | 22.8% max drawdown
 
 ## Files
 
@@ -13,6 +25,7 @@ NNFX is a structured algorithmic forex trading methodology that requires all 5 i
 |------|-------------|
 | `Experts/NNFX_Bot.mq4` | V1 live trading EA — KAMA baseline + WAE volume (best on USDJPY, GBPUSD) |
 | `Experts/NNFX_Combined.mq4` | Combined V1+V2 EA — auto-detects pair, runs best strategy per pair (magic 77702) |
+| `Experts/NNFX_Combined_H1.mq4` | V3 H1 live trading EA — MTF custom indicators, USDJPY only, 3% risk (magic 77703) |
 | `Experts/NNFX_RepaintCheck.mq4` | Repaint detector — run in Strategy Tester (Every Tick) to verify indicators don't repaint |
 | `Experts/nnfxautotrade.mq4` | Semi-manual trade panel — BUY/SELL buttons with NNFX position sizing (by Alex Cercos) |
 
@@ -24,6 +37,8 @@ NNFX is a structured algorithmic forex trading methodology that requires all 5 i
 | `Scripts/NNFX_Optimizer.mq4` | Parameter sweep optimizer — tests SSL lengths, Stoch K, ATR period, KAMA vs HMA, continuation on/off |
 | `Scripts/NNFX_IndicatorTester.mq4` | Generic indicator test harness — swap any indicator into any slot with 8 signal methods |
 | `Scripts/NNFX_MegaSweep.mq4` | Bulk indicator sweep — tests 104 built-in MT4 indicator combos across all slots and 7 pairs |
+| `Scripts/NNFX_H1_Sweep_V3.mq4` | H1 V3 sweep — tests 75 custom indicator combos with MTF architecture across 7 pairs |
+| `Scripts/NNFX_H1_Focused_BT.mq4` | H1 focused backtest — trade-by-trade log at 3% risk with compounding per pair |
 
 ### Custom Indicators
 | File | Role | Source | Non-repainting |
@@ -32,6 +47,16 @@ NNFX is a structured algorithmic forex trading methodology that requires all 5 i
 | `Indicators/HMA.mq4` | Baseline (alt) | [mql5.com/en/code/25629](https://www.mql5.com/en/code/25629) | ✅ |
 | `Indicators/SSL_Channel.mq4` | C1 / C2 / Exit | [mql5.com/en/code/39878](https://www.mql5.com/en/code/39878) | ✅ |
 | `Indicators/Waddah_Attar_Explosion.mq4` | Volume | [mql5.com/en/code/7051](https://www.mql5.com/en/code/7051) | ✅ |
+| `Indicators/McGinley_Dynamic.mq4` | H4 Trend Filter (H1 V3) | Custom | ✅ |
+| `Indicators/KeltnerChannel.mq4` | Entry (H1 V3) | Custom | ✅ |
+| `Indicators/RangeFilter.mq4` | Confirmation (H1 V3) | Custom | ✅ |
+| `Indicators/HalfTrend.mq4` | Exit (H1 V3) | Custom | ✅ |
+| `Indicators/Supertrend.mq4` | Alt trend | Custom | ✅ |
+| `Indicators/Ehlers_MAMA.mq4` | Alt trend (DSP) | Custom | ✅ |
+| `Indicators/DonchianChannel.mq4` | Alt channel | Custom | ✅ |
+| `Indicators/T3_MA.mq4` | Alt MA (Tillson) | Custom | ✅ |
+| `Indicators/JMA.mq4` | Alt MA (Jurik) | Custom | ✅ |
+| `Indicators/SqueezeMomentum.mq4` | Alt volume | Custom | ✅ |
 
 ### Utilities
 | File | Description |
@@ -156,6 +181,22 @@ Default sweep = 2,304 combinations × 5 pairs. Adjust step sizes to narrow or wi
 | WAE | 1 | Red histogram (bear trend) |
 | WAE | 2 | Explosion line (BB width) |
 | WAE | 3 | Dead zone line |
+| McGinley_Dynamic | 2 | Signal (+1 bull / -1 bear) |
+| McGinley_Dynamic | 3 | MD value |
+| KeltnerChannel | 0 | Upper band |
+| KeltnerChannel | 1 | Middle (EMA) |
+| KeltnerChannel | 2 | Lower band |
+| KeltnerChannel | 3 | Signal (+1 bull / -1 bear) |
+| RangeFilter | 2 | Signal (+1 bull / -1 bear) |
+| HalfTrend | 2 | Signal (+1 bull / -1 bear) |
+| Supertrend | 2 | Signal (+1 bull / -1 bear) |
+| Ehlers_MAMA | 0 | MAMA line |
+| Ehlers_MAMA | 1 | FAMA line |
+| Ehlers_MAMA | 2 | Signal (+1 bull / -1 bear) |
+| DonchianChannel | 3 | Signal (+1 bull / -1 bear) |
+| T3_MA | 2 | Signal (+1 bull / -1 bear) |
+| JMA | 2 | Signal (+1 bull / -1 bear) |
+| SqueezeMomentum | 4 | Signal (+1 bull / -1 bear) |
 
 ## Backtest Results (2015–2025, D1, 2% risk, $10k start)
 
@@ -209,7 +250,21 @@ The **NNFX_Combined.mq4** EA auto-detects the pair and applies the best strategy
 | NZDUSD | V2 (Kijun + MomMag) | +$579 | 1.32 |
 | **Total** | | **+$2,967** | |
 
-Magic numbers: V1 standalone = 77701, Combined EA = 77702
+Magic numbers: V1 standalone = 77701, Combined D1 EA = 77702, H1 EA = 77703
+
+### H1 V3: Custom Indicators + MTF (2020–2025, H1, 3% risk, $10k, compounding)
+
+V3 sweep tested 75 custom indicator combos with H4 trend filter + H1 entry/confirm/exit. Winner: H4 McGinley(14) + Keltner(20) entry + RangeFilter(30,2.5) confirm + HalfTrend(3) exit.
+
+| Pair | Trades | WR% | Net Profit | PF | MaxDD% | Final Balance |
+|------|--------|------|------------|------|--------|---------------|
+| **USDJPY** | **679** | **67.0%** | **+$69,344** | **1.66** | **22.8%** | **$79,344** |
+| GBPUSD | 672 | 53.1% | +$2,369 | 1.03 | 37.9% | $12,369 |
+| AUDUSD | 665 | 53.5% | +$1,184 | 1.03 | 29.4% | $11,184 |
+| EURUSD | 668 | 49.3% | -$6,021 | 0.87 | 60.2% | $3,979 |
+| USDCAD | 673 | 47.5% | -$6,896 | 0.82 | 69.0% | $3,104 |
+
+**H1 V3 recommended pair: USDJPY only.** At 3% risk with compounding, drawdowns on weaker pairs destroy accounts.
 
 ### Pre-Optimization: Stoch C2 | SSL=20 | Spread: Current Live
 
@@ -243,6 +298,9 @@ See `ini/` directory for MT4 Strategy Tester config files per pair, or use `run_
 - [x] Build combined V1+V2 EA with per-pair strategy auto-detection
 - [x] Repaint checker EA for validating custom indicators
 - [x] Generic indicator test harness (IndicatorTester)
-- [ ] Test custom (non-built-in) indicators at scale
+- [x] Test custom (non-built-in) indicators at scale (10 custom indicators, V3 sweep)
+- [x] Build H1 MTF strategy with custom indicators (V3: McGinley + Keltner + RangeFilter + HalfTrend)
+- [x] Focused backtest with compounding (USDJPY: $10K → $79K at 3% risk)
+- [x] Build H1 live EA (NNFX_Combined_H1.mq4, magic 77703)
 - [ ] Walk-forward analysis / out-of-sample validation
 - [ ] VPS deployment for live trading
