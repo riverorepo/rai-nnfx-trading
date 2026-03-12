@@ -36,18 +36,20 @@ input ENUM_BASE_IND InpConfirm = BASE_T3;           // Slot 3: Confirmation (Com
 input ENUM_BASE_IND InpVolume  = BASE_NONE;         // Slot 4: Volume
 input ENUM_BASE_IND InpExit    = BASE_RANGEFILTER;  // Slot 5: Exit (ComboSweep #16 winner)
 
-input int    InpPhase         = 0;     // Phase: 0=Both, 1=Coarse, 2=Fine
+input int    InpPhase         = 3;     // Phase: 0=Both, 1=Coarse, 2=Fine, 3=Walk-Forward
 input int    InpMaxResults    = 100;   // Max results to save
+input int    InpWF_TopN       = 20;    // Walk-Forward: how many top IS configs to test OOS
 
 // Fine-tune center overrides (set to 0 for auto from Phase 1)
-input double InpFineHTF_P1   = 0;     // Fine: HTF P1 center (0=auto)
-input double InpFineHTF_P2   = 0;     // Fine: HTF P2 center (0=auto)
-input double InpFineEnt_P1   = 0;     // Fine: Entry P1 center (0=auto)
-input double InpFineEnt_P2   = 0;     // Fine: Entry P2 center (0=auto)
-input double InpFineEnt_P3   = 0;     // Fine: Entry P3 center (0=auto)
-input double InpFineConf_P1  = 0;     // Fine: Confirm P1 center (0=auto)
-input double InpFineConf_P2  = 0;     // Fine: Confirm P2 center (0=auto)
-input double InpFineEx_P1    = 0;     // Fine: Exit P1 center (0=auto)
+input double InpFineHTF_P1   = 8;     // Fine: HTF P1 center (McGinley period)
+input double InpFineHTF_P2   = 0.65;  // Fine: HTF P2 center (McGinley factor)
+input double InpFineEnt_P1   = 24;    // Fine: Entry P1 center (Keltner MA period)
+input double InpFineEnt_P2   = 14;    // Fine: Entry P2 center (Keltner ATR period)
+input double InpFineEnt_P3   = 1.0;   // Fine: Entry P3 center (Keltner mult)
+input double InpFineConf_P1  = 4;     // Fine: Confirm P1 center (T3 period)
+input double InpFineConf_P2  = 0.80;  // Fine: Confirm P2 center (T3 vfactor)
+input double InpFineEx_P1    = 17;    // Fine: Exit P1 center (RangeFilter period)
+input double InpFineEx_P2    = 2.5;   // Fine: Exit P2 center (RangeFilter mult)
 
 //+------------------------------------------------------------------+
 //| CONSTANTS                                                         |
@@ -103,7 +105,7 @@ struct OptResult
    int    totalSig;
    double compositeScore;
    // Store winning params for Phase 2
-   double htfP1, htfP2, entP1, entP2, entP3, confP1, confP2, exP1;
+   double htfP1, htfP2, entP1, entP2, entP3, confP1, confP2, exP1, exP2;
    double slMult, tp1Mult, riskPct;
 };
 
@@ -112,6 +114,7 @@ struct OptResult
 //+------------------------------------------------------------------+
 string g_pairs[NUM_PAIRS];
 int    g_startBar[NUM_PAIRS], g_endBar[NUM_PAIRS];
+int    g_oosStartBar[NUM_PAIRS], g_oosEndBar[NUM_PAIRS];
 double g_tickVal[NUM_PAIRS], g_tickSz[NUM_PAIRS], g_pointVal[NUM_PAIRS], g_spread[NUM_PAIRS];
 
 // Current locked slot types
@@ -490,6 +493,34 @@ void RunAllPairs(ParamSet &ps, double &aggPF, double &aggNet, double &avgWR,
    avgWR = (activePairs>0) ? totalWR / activePairs : 0;
 }
 
+void RunAllPairsOOS(ParamSet &ps, double &aggPF, double &aggNet, double &avgWR,
+                    double &worstDD, int &totalSig, double &pairPF[], double &pairNet[])
+{
+   double totalWR=0, totalPF=0, totalNet=0;
+   int activePairs=0;
+   totalSig=0; worstDD=0;
+
+   for(int p=0; p<NUM_PAIRS; p++)
+   {
+      if(g_tickVal[p]<=0 || g_tickSz[p]<=0) { pairPF[p]=0; pairNet[p]=0; continue; }
+      PStats st;
+      RunBacktest(g_pairs[p], g_oosStartBar[p], g_oosEndBar[p], g_spread[p],
+                  g_tickVal[p], g_tickSz[p], ps, st);
+      double net = st.gp + st.gl;
+      totalSig += st.sig;
+      if(st.maxDDPct > worstDD) worstDD = st.maxDDPct;
+      pairPF[p] = (st.gl!=0) ? MathAbs(st.gp/st.gl) : 0;
+      pairNet[p] = net;
+      if(st.sig > 0) { totalPF += pairPF[p]; activePairs++; }
+      totalNet += net;
+      double wr = (st.sig>0) ? ((double)st.wins/st.sig*100.0) : 0;
+      totalWR += wr;
+   }
+   aggPF = (activePairs>0) ? totalPF / activePairs : 0;
+   aggNet = totalNet;
+   avgWR = (activePairs>0) ? totalWR / activePairs : 0;
+}
+
 //+------------------------------------------------------------------+
 //| SORT & WRITE                                                      |
 //+------------------------------------------------------------------+
@@ -686,22 +717,32 @@ void BuildConfirmRanges(ENUM_BASE_IND ind, bool coarse,
 }
 
 void BuildExitRanges(ENUM_BASE_IND ind, bool coarse,
-                     double &p1Vals[], int &p1Count)
+                     double &p1Vals[], int &p1Count,
+                     double &p2Vals[], int &p2Count)
 {
+   // Default p2 to single zero (most exit indicators only use p1)
+   ArrayResize(p2Vals, 1); p2Vals[0]=0; p2Count=1;
+
    if(coarse)
    {
       switch(ind)
       {
          case BASE_HALFTREND:
-            { double v[]={2,3,4,5}; ArrayCopy(p1Vals,v); p1Count=4; } break;
+            { double v[]={2,3,4,5}; ArrayCopy(p1Vals,v); p1Count=4; }
+            { double v[]={2}; ArrayCopy(p2Vals,v); p2Count=1; }  // channelDeviation fixed
+            break;
          case BASE_SUPERTREND:
-            { double v[]={7,10,14}; ArrayCopy(p1Vals,v); p1Count=3; } break;
+            { double v[]={7,10,14}; ArrayCopy(p1Vals,v); p1Count=3; }
+            { double v[]={1.5,2.0,3.0}; ArrayCopy(p2Vals,v); p2Count=3; }
+            break;
          case BASE_T3:
             { double v[]={3,5,8}; ArrayCopy(p1Vals,v); p1Count=3; } break;
          case BASE_JMA:
             { double v[]={5,7,10}; ArrayCopy(p1Vals,v); p1Count=3; } break;
          case BASE_RANGEFILTER:
-            { double v[]={15,20,30}; ArrayCopy(p1Vals,v); p1Count=3; } break;
+            { double v[]={15,20,30}; ArrayCopy(p1Vals,v); p1Count=3; }
+            { double v[]={1.5,2.5,4.0}; ArrayCopy(p2Vals,v); p2Count=3; }
+            break;
          case BASE_MCGINLEY:
             { double v[]={8,10,14}; ArrayCopy(p1Vals,v); p1Count=3; } break;
          case BASE_MAMA:
@@ -714,6 +755,12 @@ void BuildExitRanges(ENUM_BASE_IND ind, bool coarse,
    {
       double c1=(InpFineEx_P1>0)?InpFineEx_P1:p1Vals[0];
       BuildFineRange(ind, 1, c1, p1Vals, p1Count);
+      // Fine sweep p2 for indicators that use it
+      if(ind==BASE_RANGEFILTER || ind==BASE_SUPERTREND)
+      {
+         double c2=(InpFineEx_P2>0)?InpFineEx_P2:p2Vals[0];
+         BuildFineRange(ind, 2, c2, p2Vals, p2Count);
+      }
    }
 }
 
@@ -754,13 +801,33 @@ void OnStart()
    g_pairs[3]="USDCHF"; g_pairs[4]="AUDUSD"; g_pairs[5]="NZDUSD"; g_pairs[6]="USDCAD";
    g_pairs[7]="EURJPY"; g_pairs[8]="GBPJPY"; g_pairs[9]="EURGBP"; g_pairs[10]="AUDJPY";
 
-   datetime startDate = D'2020.01.01';
-   datetime endDate   = D'2025.01.01';
+   // Walk-forward uses IS=2020-2023, OOS=2024-2025+; full opt uses 2020-2025
+   datetime isStart  = D'2020.01.01';
+   datetime isEnd    = D'2024.01.01';  // IS ends Dec 31 2023
+   datetime oosStart = D'2024.01.01';  // OOS starts Jan 1 2024
+   datetime oosEnd   = D'2026.01.01';  // OOS ends current data
+   datetime fullStart = D'2020.01.01';
+   datetime fullEnd   = D'2026.01.01';
 
    for(int p=0; p<NUM_PAIRS; p++)
    {
-      g_startBar[p] = iBarShift(g_pairs[p], PERIOD_H1, startDate, false);
-      g_endBar[p]   = iBarShift(g_pairs[p], PERIOD_H1, endDate, false);
+      if(InpPhase == 3)
+      {
+         // Walk-forward: IS period for optimization
+         g_startBar[p] = iBarShift(g_pairs[p], PERIOD_H1, isStart, false);
+         g_endBar[p]   = iBarShift(g_pairs[p], PERIOD_H1, isEnd, false);
+         // OOS period for validation
+         g_oosStartBar[p] = iBarShift(g_pairs[p], PERIOD_H1, oosStart, false);
+         g_oosEndBar[p]   = iBarShift(g_pairs[p], PERIOD_H1, oosEnd, false);
+         if(g_oosEndBar[p]<0) g_oosEndBar[p]=0;
+         if(g_oosStartBar[p]<0) g_oosStartBar[p]=g_endBar[p];
+      }
+      else
+      {
+         g_startBar[p] = iBarShift(g_pairs[p], PERIOD_H1, fullStart, false);
+         g_endBar[p]   = iBarShift(g_pairs[p], PERIOD_H1, fullEnd, false);
+         g_oosStartBar[p]=0; g_oosEndBar[p]=0;
+      }
       if(g_endBar[p]<0)    g_endBar[p]=0;
       if(g_startBar[p]<0)  g_startBar[p]=iBars(g_pairs[p],PERIOD_H1)-1;
       g_tickVal[p]  = MarketInfo(g_pairs[p], MODE_TICKVALUE);
@@ -809,12 +876,20 @@ void OnStart()
       int confP1N, confP2N;
       BuildConfirmRanges(g_confirmType, true, confP1Vals, confP1N, confP2Vals, confP2N);
 
-      double exP1Vals[];
-      int exP1N;
-      BuildExitRanges(g_exitType, true, exP1Vals, exP1N);
+      double exP1Vals[], exP2Vals[];
+      int exP1N, exP2N;
+      BuildExitRanges(g_exitType, true, exP1Vals, exP1N, exP2Vals, exP2N);
+
+      // Pin Keltner ATR period & multiplier — they only affect bands, not the midline-cross signal
+      if(g_entryType==BASE_KELTNER)
+      {
+         Print("NOTE: Keltner ATR period/mult pinned (signal uses midline cross only)");
+         ArrayResize(entP2Vals, 1); entP2Vals[0]=14; entP2N=1;
+         ArrayResize(entP3Vals, 1); entP3Vals[0]=1.5; entP3N=1;
+      }
 
       int totalConfigs = htfP1N * htfP2N * entP1N * entP2N * entP3N *
-                         confP1N * confP2N * exP1N * numSL * numTP * numRisk;
+                         confP1N * confP2N * exP1N * exP2N * numSL * numTP * numRisk;
       Print("Phase 1 configs: ", totalConfigs);
 
       uint startTick = GetTickCount();
@@ -828,6 +903,7 @@ void OnStart()
       for(int iCP1=0; iCP1<confP1N; iCP1++)
       for(int iCP2=0; iCP2<confP2N; iCP2++)
       for(int iXP1=0; iXP1<exP1N; iXP1++)
+      for(int iXP2=0; iXP2<exP2N; iXP2++)
       for(int iSL=0; iSL<numSL; iSL++)
       for(int iTP=0; iTP<numTP; iTP++)
       for(int iRK=0; iRK<numRisk; iRK++)
@@ -853,9 +929,8 @@ void OnStart()
          if(g_confirmType==BASE_HALFTREND) { ps.confP3=100; }
          if(g_confirmType==BASE_KELTNER) { ps.confP3=1.5; }
          ps.volP1=20; ps.volP2=2.0; ps.volP3=20; ps.volP4=1.5;
-         ps.exP1=exP1Vals[iXP1]; ps.exP2=0; ps.exP3=0;
-         if(g_exitType==BASE_HALFTREND) { ps.exP2=2; ps.exP3=100; }
-         if(g_exitType==BASE_SUPERTREND) { ps.exP2=2.0; }
+         ps.exP1=exP1Vals[iXP1]; ps.exP2=exP2Vals[iXP2]; ps.exP3=0;
+         if(g_exitType==BASE_HALFTREND) { ps.exP3=100; }
          ps.slMult=slMults[iSL]; ps.tp1Mult=tp1Mults[iTP]; ps.riskPct=riskPcts[iRK];
 
          double aggPF, aggNet, avgWR, worstDD;
@@ -865,11 +940,11 @@ void OnStart()
          RunAllPairs(ps, aggPF, aggNet, avgWR, worstDD, totalSig, pPF, pNet);
 
          OptResult res;
-         res.label = StringFormat("H(%s,%.0f,%.2f) E(%s,%.0f,%.0f,%.2f) C(%s,%.0f,%.2f) X(%s,%.0f) SL=%.2f TP=%.2f R=%.0f%%",
+         res.label = StringFormat("H(%s,%.0f,%.2f) E(%s,%.0f,%.0f,%.2f) C(%s,%.0f,%.2f) X(%s,%.0f,%.2f) SL=%.2f TP=%.2f R=%.0f%%",
             BaseIndName(g_htfType), ps.htfP1, ps.htfP2,
             BaseIndName(g_entryType), ps.entP1, ps.entP2, ps.entP3,
             BaseIndName(g_confirmType), ps.confP1, ps.confP2,
-            BaseIndName(g_exitType), ps.exP1,
+            BaseIndName(g_exitType), ps.exP1, ps.exP2,
             ps.slMult, ps.tp1Mult, ps.riskPct);
          for(int pp=0; pp<NUM_PAIRS; pp++) { res.pairPF[pp]=pPF[pp]; res.pairNet[pp]=pNet[pp]; }
          res.aggPF=aggPF; res.aggNet=aggNet; res.avgWR=avgWR; res.worstDD=worstDD;
@@ -878,7 +953,7 @@ void OnStart()
          res.htfP1=ps.htfP1; res.htfP2=ps.htfP2;
          res.entP1=ps.entP1; res.entP2=ps.entP2; res.entP3=ps.entP3;
          res.confP1=ps.confP1; res.confP2=ps.confP2;
-         res.exP1=ps.exP1;
+         res.exP1=ps.exP1; res.exP2=ps.exP2;
          res.slMult=ps.slMult; res.tp1Mult=ps.tp1Mult; res.riskPct=ps.riskPct;
 
          InsertResult(phase1Results, phase1Count, maxKeep, res);
@@ -902,7 +977,7 @@ void OnStart()
 
       // Use Phase 1 winner as center, or use input overrides
       double centerHTFP1, centerHTFP2, centerEntP1, centerEntP2, centerEntP3;
-      double centerConfP1, centerConfP2, centerExP1;
+      double centerConfP1, centerConfP2, centerExP1, centerExP2;
       double centerSL, centerTP, centerRisk;
 
       if(phase1Count > 0 && InpPhase == 0)
@@ -910,7 +985,7 @@ void OnStart()
          centerHTFP1=phase1Results[0].htfP1; centerHTFP2=phase1Results[0].htfP2;
          centerEntP1=phase1Results[0].entP1; centerEntP2=phase1Results[0].entP2; centerEntP3=phase1Results[0].entP3;
          centerConfP1=phase1Results[0].confP1; centerConfP2=phase1Results[0].confP2;
-         centerExP1=phase1Results[0].exP1;
+         centerExP1=phase1Results[0].exP1; centerExP2=phase1Results[0].exP2;
          centerSL=phase1Results[0].slMult; centerTP=phase1Results[0].tp1Mult; centerRisk=phase1Results[0].riskPct;
       }
       else
@@ -924,12 +999,13 @@ void OnStart()
          centerConfP1=(InpFineConf_P1>0)?InpFineConf_P1:30;
          centerConfP2=(InpFineConf_P2>0)?InpFineConf_P2:2.5;
          centerExP1=(InpFineEx_P1>0)?InpFineEx_P1:3;
-         centerSL=1.0; centerTP=1.5; centerRisk=5.0;
+         centerExP2=(InpFineEx_P2>0)?InpFineEx_P2:2.5;
+         centerSL=1.5; centerTP=2.0; centerRisk=5.0;
       }
 
       // Build fine ranges
-      double fHTFP1[], fHTFP2[], fEntP1[], fEntP2[], fEntP3[], fConfP1[], fConfP2[], fExP1[];
-      int nHP1, nHP2, nEP1, nEP2, nEP3, nCP1, nCP2, nXP1;
+      double fHTFP1[], fHTFP2[], fEntP1[], fEntP2[], fEntP3[], fConfP1[], fConfP2[], fExP1[], fExP2[];
+      int nHP1, nHP2, nEP1, nEP2, nEP3, nCP1, nCP2, nXP1, nXP2;
 
       BuildFineRange(g_htfType, 1, centerHTFP1, fHTFP1, nHP1);
       // Middle ground: 2 values for McGinley K (center and center+step)
@@ -939,14 +1015,22 @@ void OnStart()
         if(fHTFP2[1]<=0)  { ArrayResize(fHTFP2,1); nHP2=1; }
       }
       BuildFineRange(g_entryType, 1, centerEntP1, fEntP1, nEP1);
-      // Middle ground: 2 values for Keltner ATR period (center and center+step)
-      { double step=(centerEntP2>=10)?2:1;
-        ArrayResize(fEntP2,2); fEntP2[0]=centerEntP2; fEntP2[1]=centerEntP2+step; nEP2=2;
-        if(fEntP2[1]<=0) { ArrayResize(fEntP2,1); nEP2=1; }
-      }
+      // Pin Keltner ATR period & multiplier — they only affect bands, not the midline-cross signal
       if(g_entryType==BASE_KELTNER)
-         BuildFineRange(g_entryType, 3, centerEntP3, fEntP3, nEP3);
-      else { ArrayResize(fEntP3,1); fEntP3[0]=centerEntP3; nEP3=1; }
+      {
+         ArrayResize(fEntP2, 1); fEntP2[0]=centerEntP2; nEP2=1;
+         ArrayResize(fEntP3, 1); fEntP3[0]=centerEntP3; nEP3=1;
+         Print("NOTE: Keltner ATR period/mult pinned (signal uses midline cross only)");
+      }
+      else
+      {
+         // Middle ground: 2 values for ATR period (center and center+step)
+         { double step=(centerEntP2>=10)?2:1;
+           ArrayResize(fEntP2,2); fEntP2[0]=centerEntP2; fEntP2[1]=centerEntP2+step; nEP2=2;
+           if(fEntP2[1]<=0) { ArrayResize(fEntP2,1); nEP2=1; }
+         }
+         { ArrayResize(fEntP3,1); fEntP3[0]=centerEntP3; nEP3=1; }
+      }
 
       if(g_confirmType==BASE_NONE)
       { ArrayResize(fConfP1,1); fConfP1[0]=0; nCP1=1;
@@ -962,6 +1046,15 @@ void OnStart()
          }
       }
       BuildFineRange(g_exitType, 1, centerExP1, fExP1, nXP1);
+      // Fine sweep exit p2 for indicators that use it (RangeFilter mult, Supertrend mult)
+      if(g_exitType==BASE_RANGEFILTER || g_exitType==BASE_SUPERTREND)
+      {
+         BuildFineRange(g_exitType, 2, centerExP2, fExP2, nXP2);
+      }
+      else
+      {
+         ArrayResize(fExP2, 1); fExP2[0]=0; nXP2=1;
+      }
 
       // Fine SL/TP/Risk: ±1 step around center
       double fSL[], fTP[], fRisk[];
@@ -973,7 +1066,7 @@ void OnStart()
       // Clamp minimums
       for(int i=0; i<3; i++) { if(fSL[i]<0.5) fSL[i]=0.5; if(fTP[i]<0.5) fTP[i]=0.5; }
 
-      int totalFine = nHP1*nHP2*nEP1*nEP2*nEP3*nCP1*nCP2*nXP1*nSL*nTP*nRisk;
+      int totalFine = nHP1*nHP2*nEP1*nEP2*nEP3*nCP1*nCP2*nXP1*nXP2*nSL*nTP*nRisk;
       Print("Phase 2 configs: ", totalFine);
 
       OptResult phase2Results[];
@@ -991,6 +1084,7 @@ void OnStart()
       for(int iCP1=0; iCP1<nCP1; iCP1++)
       for(int iCP2=0; iCP2<nCP2; iCP2++)
       for(int iXP1=0; iXP1<nXP1; iXP1++)
+      for(int iXP2=0; iXP2<nXP2; iXP2++)
       for(int iSL=0; iSL<nSL; iSL++)
       for(int iTP=0; iTP<nTP; iTP++)
       for(int iRK=0; iRK<nRisk; iRK++)
@@ -1015,9 +1109,8 @@ void OnStart()
          if(g_confirmType==BASE_HALFTREND) { ps.confP3=100; }
          if(g_confirmType==BASE_KELTNER) { ps.confP3=1.5; }
          ps.volP1=20; ps.volP2=2.0; ps.volP3=20; ps.volP4=1.5;
-         ps.exP1=fExP1[iXP1]; ps.exP2=0; ps.exP3=0;
-         if(g_exitType==BASE_HALFTREND) { ps.exP2=2; ps.exP3=100; }
-         if(g_exitType==BASE_SUPERTREND) { ps.exP2=2.0; }
+         ps.exP1=fExP1[iXP1]; ps.exP2=fExP2[iXP2]; ps.exP3=0;
+         if(g_exitType==BASE_HALFTREND) { ps.exP3=100; }
          ps.slMult=fSL[iSL]; ps.tp1Mult=fTP[iTP]; ps.riskPct=fRisk[iRK];
 
          double aggPF, aggNet, avgWR, worstDD;
@@ -1027,9 +1120,9 @@ void OnStart()
          RunAllPairs(ps, aggPF, aggNet, avgWR, worstDD, totalSig, pPF, pNet);
 
          OptResult res;
-         res.label = StringFormat("H(%.0f,%.2f) E(%.0f,%.0f,%.2f) C(%.0f,%.2f) X(%.0f) SL=%.2f TP=%.2f R=%.0f%%",
+         res.label = StringFormat("H(%.0f,%.2f) E(%.0f,%.0f,%.2f) C(%.0f,%.2f) X(%.0f,%.2f) SL=%.2f TP=%.2f R=%.0f%%",
             ps.htfP1, ps.htfP2, ps.entP1, ps.entP2, ps.entP3,
-            ps.confP1, ps.confP2, ps.exP1,
+            ps.confP1, ps.confP2, ps.exP1, ps.exP2,
             ps.slMult, ps.tp1Mult, ps.riskPct);
          for(int pp=0; pp<NUM_PAIRS; pp++) { res.pairPF[pp]=pPF[pp]; res.pairNet[pp]=pNet[pp]; }
          res.aggPF=aggPF; res.aggNet=aggNet; res.avgWR=avgWR; res.worstDD=worstDD;
@@ -1052,7 +1145,266 @@ void OnStart()
    }
 
    // Also write combined output
-   WriteCSV(phase1Results, phase1Count, "NNFX_H1_ParamOpt_Results.csv");
+   if(InpPhase != 3)
+      WriteCSV(phase1Results, phase1Count, "NNFX_H1_ParamOpt_Results.csv");
+
+   // Phase 3: Walk-Forward Validation
+   if(InpPhase == 3)
+   {
+      Print("--- Phase 3: Walk-Forward Validation ---");
+      Print("IS: 2020-01-01 to 2023-12-31 | OOS: 2024-01-01 to present");
+
+      // Run Phase 2 fine sweep on IS period (g_startBar/g_endBar already set to IS)
+      double centerHTFP1_wf, centerHTFP2_wf, centerEntP1_wf, centerEntP2_wf, centerEntP3_wf;
+      double centerConfP1_wf, centerConfP2_wf, centerExP1_wf, centerExP2_wf;
+      double centerSL_wf, centerTP_wf, centerRisk_wf;
+
+      centerHTFP1_wf=(InpFineHTF_P1>0)?InpFineHTF_P1:14;
+      centerHTFP2_wf=(InpFineHTF_P2>0)?InpFineHTF_P2:0.6;
+      centerEntP1_wf=(InpFineEnt_P1>0)?InpFineEnt_P1:20;
+      centerEntP2_wf=(InpFineEnt_P2>0)?InpFineEnt_P2:20;
+      centerEntP3_wf=(InpFineEnt_P3>0)?InpFineEnt_P3:1.5;
+      centerConfP1_wf=(InpFineConf_P1>0)?InpFineConf_P1:30;
+      centerConfP2_wf=(InpFineConf_P2>0)?InpFineConf_P2:2.5;
+      centerExP1_wf=(InpFineEx_P1>0)?InpFineEx_P1:3;
+      centerExP2_wf=(InpFineEx_P2>0)?InpFineEx_P2:2.5;
+      centerSL_wf=1.5; centerTP_wf=2.0; centerRisk_wf=5.0;
+
+      // Build fine ranges (same as Phase 2)
+      double wfHTFP1[], wfHTFP2[], wfEntP1[], wfEntP2[], wfEntP3[];
+      double wfConfP1[], wfConfP2[], wfExP1[], wfExP2[];
+      int wnHP1, wnHP2, wnEP1, wnEP2, wnEP3, wnCP1, wnCP2, wnXP1, wnXP2;
+
+      BuildFineRange(g_htfType, 1, centerHTFP1_wf, wfHTFP1, wnHP1);
+      { double step=0.05;
+        ArrayResize(wfHTFP2,2); wfHTFP2[0]=centerHTFP2_wf; wfHTFP2[1]=centerHTFP2_wf+step; wnHP2=2;
+        if(wfHTFP2[1]>1.0) { wfHTFP2[1]=centerHTFP2_wf-step; }
+        if(wfHTFP2[1]<=0)  { ArrayResize(wfHTFP2,1); wnHP2=1; }
+      }
+      BuildFineRange(g_entryType, 1, centerEntP1_wf, wfEntP1, wnEP1);
+      if(g_entryType==BASE_KELTNER)
+      {
+         ArrayResize(wfEntP2, 1); wfEntP2[0]=centerEntP2_wf; wnEP2=1;
+         ArrayResize(wfEntP3, 1); wfEntP3[0]=centerEntP3_wf; wnEP3=1;
+      }
+      else
+      {
+         { double step=(centerEntP2_wf>=10)?2:1;
+           ArrayResize(wfEntP2,2); wfEntP2[0]=centerEntP2_wf; wfEntP2[1]=centerEntP2_wf+step; wnEP2=2;
+           if(wfEntP2[1]<=0) { ArrayResize(wfEntP2,1); wnEP2=1; }
+         }
+         { ArrayResize(wfEntP3,1); wfEntP3[0]=centerEntP3_wf; wnEP3=1; }
+      }
+
+      if(g_confirmType==BASE_NONE)
+      { ArrayResize(wfConfP1,1); wfConfP1[0]=0; wnCP1=1;
+        ArrayResize(wfConfP2,1); wfConfP2[0]=0; wnCP2=1; }
+      else
+      {
+         BuildFineRange(g_confirmType, 1, centerConfP1_wf, wfConfP1, wnCP1);
+         { double step=0.1;
+           ArrayResize(wfConfP2,2); wfConfP2[0]=centerConfP2_wf; wfConfP2[1]=centerConfP2_wf+step; wnCP2=2;
+           if(wfConfP2[1]>1.0) { wfConfP2[1]=centerConfP2_wf-step; }
+           if(wfConfP2[1]<=0)  { ArrayResize(wfConfP2,1); wnCP2=1; }
+         }
+      }
+      BuildFineRange(g_exitType, 1, centerExP1_wf, wfExP1, wnXP1);
+      if(g_exitType==BASE_RANGEFILTER || g_exitType==BASE_SUPERTREND)
+         BuildFineRange(g_exitType, 2, centerExP2_wf, wfExP2, wnXP2);
+      else
+      { ArrayResize(wfExP2, 1); wfExP2[0]=0; wnXP2=1; }
+
+      double wfSL[], wfTP[], wfRisk[];
+      int wnSL=3, wnTP=3, wnRisk=1;
+      ArrayResize(wfSL, 3); ArrayResize(wfTP, 3); ArrayResize(wfRisk, 1);
+      wfSL[0]=centerSL_wf-0.15; wfSL[1]=centerSL_wf; wfSL[2]=centerSL_wf+0.15;
+      wfTP[0]=centerTP_wf-0.15; wfTP[1]=centerTP_wf; wfTP[2]=centerTP_wf+0.15;
+      wfRisk[0]=centerRisk_wf;
+      for(int i=0; i<3; i++) { if(wfSL[i]<0.5) wfSL[i]=0.5; if(wfTP[i]<0.5) wfTP[i]=0.5; }
+
+      int totalWF = wnHP1*wnHP2*wnEP1*wnEP2*wnEP3*wnCP1*wnCP2*wnXP1*wnXP2*wnSL*wnTP*wnRisk;
+      Print("Walk-Forward IS configs: ", totalWF);
+
+      // --- IS Sweep ---
+      OptResult wfISResults[];
+      int wfISCount = 0;
+      int wfMaxKeep = InpMaxResults * 2;
+      ArrayResize(wfISResults, wfMaxKeep);
+
+      uint startTickWF = GetTickCount();
+      int cfgNumWF = 0;
+
+      for(int iHP1=0; iHP1<wnHP1; iHP1++)
+      for(int iHP2=0; iHP2<wnHP2; iHP2++)
+      for(int iEP1=0; iEP1<wnEP1; iEP1++)
+      for(int iEP2=0; iEP2<wnEP2; iEP2++)
+      for(int iEP3=0; iEP3<wnEP3; iEP3++)
+      for(int iCP1=0; iCP1<wnCP1; iCP1++)
+      for(int iCP2=0; iCP2<wnCP2; iCP2++)
+      for(int iXP1=0; iXP1<wnXP1; iXP1++)
+      for(int iXP2=0; iXP2<wnXP2; iXP2++)
+      for(int iSL=0; iSL<wnSL; iSL++)
+      for(int iTP=0; iTP<wnTP; iTP++)
+      for(int iRK=0; iRK<wnRisk; iRK++)
+      {
+         if(IsStopped()) break;
+         cfgNumWF++;
+
+         if(cfgNumWF % 100 == 0)
+         {
+            uint elapsedWF = GetTickCount() - startTickWF;
+            double pctWF = (double)cfgNumWF / totalWF * 100.0;
+            double remWF = (pctWF>0) ? (elapsedWF/pctWF*(100.0-pctWF))/1000.0 : 0;
+            Print("WF-IS: ", cfgNumWF, "/", totalWF, " (", DoubleToStr(pctWF,1), "%) ~",
+                  DoubleToStr(remWF,0), "s rem");
+         }
+
+         ParamSet ps;
+         ps.htfP1=wfHTFP1[iHP1]; ps.htfP2=wfHTFP2[iHP2]; ps.htfP3=0;
+         ps.entP1=wfEntP1[iEP1]; ps.entP2=wfEntP2[iEP2]; ps.entP3=wfEntP3[iEP3];
+         ps.confP1=wfConfP1[iCP1]; ps.confP2=wfConfP2[iCP2]; ps.confP3=0; ps.confP4=0;
+         if(g_confirmType==BASE_SQUEEZE) { ps.confP3=wfConfP1[iCP1]; ps.confP4=wfConfP2[iCP2]; }
+         if(g_confirmType==BASE_HALFTREND) { ps.confP3=100; }
+         if(g_confirmType==BASE_KELTNER) { ps.confP3=1.5; }
+         ps.volP1=20; ps.volP2=2.0; ps.volP3=20; ps.volP4=1.5;
+         ps.exP1=wfExP1[iXP1]; ps.exP2=wfExP2[iXP2]; ps.exP3=0;
+         if(g_exitType==BASE_HALFTREND) { ps.exP3=100; }
+         ps.slMult=wfSL[iSL]; ps.tp1Mult=wfTP[iTP]; ps.riskPct=wfRisk[iRK];
+
+         double aggPF, aggNet, avgWR, worstDD;
+         int totalSig;
+         double pPF[], pNet[];
+         ArrayResize(pPF, NUM_PAIRS); ArrayResize(pNet, NUM_PAIRS);
+         RunAllPairs(ps, aggPF, aggNet, avgWR, worstDD, totalSig, pPF, pNet);
+
+         OptResult res;
+         res.label = StringFormat("H(%.0f,%.2f) E(%.0f,%.0f,%.2f) C(%.0f,%.2f) X(%.0f,%.2f) SL=%.2f TP=%.2f R=%.0f%%",
+            ps.htfP1, ps.htfP2, ps.entP1, ps.entP2, ps.entP3,
+            ps.confP1, ps.confP2, ps.exP1, ps.exP2,
+            ps.slMult, ps.tp1Mult, ps.riskPct);
+         for(int pp=0; pp<NUM_PAIRS; pp++) { res.pairPF[pp]=pPF[pp]; res.pairNet[pp]=pNet[pp]; }
+         res.aggPF=aggPF; res.aggNet=aggNet; res.avgWR=avgWR; res.worstDD=worstDD;
+         res.totalSig=totalSig;
+         res.compositeScore = aggPF * MathSqrt((double)totalSig);
+         res.slMult=ps.slMult; res.tp1Mult=ps.tp1Mult; res.riskPct=ps.riskPct;
+
+         InsertResult(wfISResults, wfISCount, wfMaxKeep, res);
+      }
+
+      SortResults(wfISResults, wfISCount);
+
+      // --- OOS Validation of top N IS results ---
+      int topN_WF = MathMin(wfISCount, InpWF_TopN);
+      Print("=== Walk-Forward: Testing top ", topN_WF, " IS configs on OOS ===");
+
+      int wfHandle = FileOpen("NNFX_H1_WalkForward.csv", FILE_WRITE | FILE_CSV, ',');
+      if(wfHandle < 0) { Print("ERROR: Cannot open WalkForward CSV"); }
+      else
+      {
+         FileWrite(wfHandle,
+            "Rank","Label",
+            "IS_PF","IS_WR","IS_DD","IS_Signals",
+            "OOS_PF","OOS_WR","OOS_DD","OOS_Signals",
+            "PF_Decay",
+            "IS_EURUSD","IS_GBPUSD","IS_USDJPY","IS_USDCHF","IS_AUDUSD","IS_NZDUSD","IS_USDCAD","IS_EURJPY",
+            "OOS_EURUSD","OOS_GBPUSD","OOS_USDJPY","OOS_USDCHF","OOS_AUDUSD","OOS_NZDUSD","OOS_USDCAD","OOS_EURJPY",
+            "SL_Mult","TP1_Mult","Risk_Pct");
+
+         for(int w=0; w<topN_WF; w++)
+         {
+            // Reconstruct ParamSet from label — parse the IS winner's params
+            // We stored IS results but need the ParamSet to run OOS
+            // Re-parse from the sweep arrays using the result's stored values
+            ParamSet psOOS;
+            // Parse params from label (format: "H(p1,p2) E(p1,p2,p3) C(p1,p2) X(p1,p2) SL=x TP=x R=x%")
+            // Easier: store the full ParamSet in the result — but we don't have that
+            // Use the stored individual params instead
+            psOOS.htfP1=0; psOOS.htfP2=0; psOOS.htfP3=0;
+            psOOS.entP1=0; psOOS.entP2=0; psOOS.entP3=0;
+            psOOS.confP1=0; psOOS.confP2=0; psOOS.confP3=0; psOOS.confP4=0;
+            psOOS.volP1=20; psOOS.volP2=2.0; psOOS.volP3=20; psOOS.volP4=1.5;
+            psOOS.exP1=0; psOOS.exP2=0; psOOS.exP3=0;
+            psOOS.slMult=wfISResults[w].slMult;
+            psOOS.tp1Mult=wfISResults[w].tp1Mult;
+            psOOS.riskPct=wfISResults[w].riskPct;
+
+            // Parse label to extract params
+            string label = wfISResults[w].label;
+            // H(htfP1,htfP2) E(entP1,entP2,entP3) C(confP1,confP2) X(exP1,exP2)
+            int pos = 0;
+            // HTF
+            pos = StringFind(label, "H(") + 2;
+            int comma = StringFind(label, ",", pos);
+            psOOS.htfP1 = StringToDouble(StringSubstr(label, pos, comma-pos));
+            pos = comma + 1;
+            comma = StringFind(label, ")", pos);
+            psOOS.htfP2 = StringToDouble(StringSubstr(label, pos, comma-pos));
+            // Entry
+            pos = StringFind(label, "E(") + 2;
+            comma = StringFind(label, ",", pos);
+            psOOS.entP1 = StringToDouble(StringSubstr(label, pos, comma-pos));
+            pos = comma + 1;
+            comma = StringFind(label, ",", pos);
+            psOOS.entP2 = StringToDouble(StringSubstr(label, pos, comma-pos));
+            pos = comma + 1;
+            comma = StringFind(label, ")", pos);
+            psOOS.entP3 = StringToDouble(StringSubstr(label, pos, comma-pos));
+            // Confirm
+            pos = StringFind(label, "C(") + 2;
+            comma = StringFind(label, ",", pos);
+            psOOS.confP1 = StringToDouble(StringSubstr(label, pos, comma-pos));
+            pos = comma + 1;
+            comma = StringFind(label, ")", pos);
+            psOOS.confP2 = StringToDouble(StringSubstr(label, pos, comma-pos));
+            if(g_confirmType==BASE_SQUEEZE) { psOOS.confP3=psOOS.confP1; psOOS.confP4=psOOS.confP2; }
+            if(g_confirmType==BASE_HALFTREND) { psOOS.confP3=100; }
+            if(g_confirmType==BASE_KELTNER) { psOOS.confP3=1.5; }
+            // Exit
+            pos = StringFind(label, "X(") + 2;
+            comma = StringFind(label, ",", pos);
+            psOOS.exP1 = StringToDouble(StringSubstr(label, pos, comma-pos));
+            pos = comma + 1;
+            comma = StringFind(label, ")", pos);
+            psOOS.exP2 = StringToDouble(StringSubstr(label, pos, comma-pos));
+            if(g_exitType==BASE_HALFTREND) { psOOS.exP3=100; }
+
+            // Run OOS
+            double oosPF, oosNet, oosWR, oosDD;
+            int oosSig;
+            double oosPairPF[], oosPairNet[];
+            ArrayResize(oosPairPF, NUM_PAIRS); ArrayResize(oosPairNet, NUM_PAIRS);
+            RunAllPairsOOS(psOOS, oosPF, oosNet, oosWR, oosDD, oosSig, oosPairPF, oosPairNet);
+
+            double pfDecay = (wfISResults[w].aggPF > 0) ?
+                             (oosPF / wfISResults[w].aggPF * 100.0) : 0;
+
+            Print(StringFormat("WF #%d %s  IS: PF=%.2f WR=%.1f%% DD=%.1f%%  OOS: PF=%.2f WR=%.1f%% DD=%.1f%%  Decay=%.0f%%",
+               w+1, wfISResults[w].label,
+               wfISResults[w].aggPF, wfISResults[w].avgWR, wfISResults[w].worstDD,
+               oosPF, oosWR, oosDD, pfDecay));
+
+            FileWrite(wfHandle,
+               w+1, wfISResults[w].label,
+               DoubleToStr(wfISResults[w].aggPF,2), DoubleToStr(wfISResults[w].avgWR,1),
+               DoubleToStr(wfISResults[w].worstDD,1), wfISResults[w].totalSig,
+               DoubleToStr(oosPF,2), DoubleToStr(oosWR,1),
+               DoubleToStr(oosDD,1), oosSig,
+               DoubleToStr(pfDecay,1),
+               DoubleToStr(wfISResults[w].pairPF[0],2), DoubleToStr(wfISResults[w].pairPF[1],2),
+               DoubleToStr(wfISResults[w].pairPF[2],2), DoubleToStr(wfISResults[w].pairPF[3],2),
+               DoubleToStr(wfISResults[w].pairPF[4],2), DoubleToStr(wfISResults[w].pairPF[5],2),
+               DoubleToStr(wfISResults[w].pairPF[6],2), DoubleToStr(wfISResults[w].pairPF[7],2),
+               DoubleToStr(oosPairPF[0],2), DoubleToStr(oosPairPF[1],2),
+               DoubleToStr(oosPairPF[2],2), DoubleToStr(oosPairPF[3],2),
+               DoubleToStr(oosPairPF[4],2), DoubleToStr(oosPairPF[5],2),
+               DoubleToStr(oosPairPF[6],2), DoubleToStr(oosPairPF[7],2),
+               DoubleToStr(wfISResults[w].slMult,2), DoubleToStr(wfISResults[w].tp1Mult,2),
+               DoubleToStr(wfISResults[w].riskPct,1));
+         }
+         FileClose(wfHandle);
+         Print("Walk-Forward results saved: MQL4/Files/NNFX_H1_WalkForward.csv");
+      }
+   }
 
    Print("=== Parameter Optimization Complete ===");
    Alert("NNFX H1 ParamOpt done! Check MQL4/Files/NNFX_H1_ParamOpt_*.csv");
