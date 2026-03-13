@@ -15,6 +15,7 @@ Automated trading bots implementing the No Nonsense Forex (NNFX) strategy for Me
 |----|-----------|-------|-------|----------|
 | NNFX_Combined.mq4 | D1 | EURUSD, GBPUSD, USDJPY, NZDUSD | 77702 | V1 KAMA/V2 Kijun auto-detect |
 | NNFX_Combined_H1.mq4 | H1 | USDJPY only | 77703 | V3 MTF custom indicators |
+| NNFX_H1_V4.mq4 | H1 | 8 majors | 77704 | V4 walk-forward validated (T3 confirm + RF exit) |
 
 ## H1 V3 Strategy (Live — USDJPY only)
 - H4 McGinley Dynamic(14) — trend direction filter
@@ -24,16 +25,26 @@ Automated trading bots implementing the No Nonsense Forex (NNFX) strategy for Me
 - 3% risk with compounding, split into 2 orders (TP at 1xATR + runner)
 - Object prefix: "NNFXH1_" (D1 uses "NNFX_")
 
-## H1 V4 Optimization (Current Focus — DO NOT BUILD EA YET)
+## H1 V4 Strategy (Live 2026-03-12 — 8 majors, 5% risk)
 
-### Phase 2 Winner (2026-03-12, post-bugfix, full dataset 2020–2025)
+### Walk-Forward Winner (2026-03-12)
+- H4 McGinley Dynamic(7, factor=0.65) — trend filter
+- H1 Keltner Channel(22) — midline flip entry (ATR/mult pinned, signal uses midline only)
+- H1 T3(3, factor=0.90) — confirmation
+- H1 RangeFilter(15, mult=3.00) — exit
+- SL=1.65x ATR, TP=2.15x ATR, 5% risk
+- IS PF: 2.43 | OOS PF: 2.59 | PF Decay: 106.6% (no overfitting)
+- IS WR: 62.8% | OOS WR: 61.6% | OOS DD: 30.7%
+- All 20 walk-forward configs passed validation (OOS PF 2.42–2.63)
+- Results: `MQL4/Files/NNFX_H1_WalkForward.csv`
+
+### Phase 2 Winner (full dataset 2020–2025, pre-walk-forward)
 - H4 McGinley Dynamic(8, factor=0.65) — trend filter
 - H1 Keltner Channel(22, ATR=14, mult=1.00) — entry (midline cross signal only)
 - H1 T3(3, factor=0.90) — confirmation
 - H1 RangeFilter(17, mult=2.00) — exit
 - SL=1.50x ATR, TP=2.15x ATR, 5% risk
 - Aggregate PF: 3.14 | Avg WR: 61.1% | Worst DD: 25.7%
-- ALL 8 pairs profitable (USDJPY 7.14, EURJPY 3.43, EURUSD 2.77, USDCAD 2.66, USDCHF 2.58, AUDUSD 2.38, NZDUSD 2.17, GBPUSD 2.00)
 - Results file: `MQL4/Files/NNFX_H1_ParamOpt_Phase2.csv`
 
 ### Bugs Fixed (2026-03-12)
@@ -42,7 +53,7 @@ Automated trading bots implementing the No Nonsense Forex (NNFX) strategy for Me
 
 ### Before Building V4 EA — Must Do:
 1. ~~**Investigate identical results bug**~~ — FIXED. See bugs above.
-2. **Walk-forward validation** — IN PROGRESS. Phase 3 added to ParamOptimizer: optimizes on IS (2020–2023), tests top 20 on OOS (2024–present). Output: `MQL4/Files/NNFX_H1_WalkForward.csv` with IS/OOS PF side-by-side and PF Decay %.
+2. ~~**Walk-forward validation**~~ — DONE. All 20 configs passed. OOS PF equal/better than IS (PF Decay 100.9–112.4%). No overfitting detected. Results: `MQL4/Files/NNFX_H1_WalkForward.csv`.
 3. **Test lower risk levels** — 5% risk with 25.7% DD. Test at 3% and 2% to see drawdown impact.
 4. **Test missing pairs** — GBPJPY, EURGBP, AUDJPY showed 0.00 PF (not tested or no data). EURJPY scored 3.43 so JPY crosses may be strong.
 5. **Verify spread assumptions** — Confirm what spread mode the sweep used (live snapshot vs typical averages).
@@ -75,13 +86,13 @@ All use closed-bar data only. Signal buffers use +1 (bull) / -1 (bear) conventio
 ## Key Optimization Changes (V3 → V4 candidate)
 | Parameter | V3 (live) | V4 (candidate) |
 |-----------|-----------|----------------|
-| McGinley period | 14 | 8 |
+| McGinley period | 14 | 7 |
 | McGinley factor | — | 0.65 |
 | Keltner MA period | 20 | 22 |
-| Keltner ATR/mult | 20 / 1.5 | 14 / 1.00 (pinned — signal uses midline only) |
+| Keltner ATR/mult | 20 / 1.5 | pinned (signal uses midline only) |
 | Confirmation | RangeFilter(30, 2.5) | T3(3, 0.90) |
-| Exit | HalfTrend(3) | RangeFilter(17, 2.00) |
-| SL | 1.5x ATR | 1.50x ATR |
+| Exit | HalfTrend(3) | RangeFilter(15, 3.00) |
+| SL | 1.5x ATR | 1.65x ATR |
 | TP | 1.0x ATR | 2.15x ATR |
 | Risk | 3% | 5% (test at 2-3% too) |
 | Viable pairs | USDJPY only | All 8 majors |
